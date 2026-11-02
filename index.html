@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%238df0c1'/></svg>" />
+    <title>Fútbol Total Manager</title>
+    <style>
+      html, body { margin: 0; background: #0a0e14; }
+      #ftm-boot { position: fixed; inset: 0; z-index: 99999; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 14px; background: #0a0e14;
+        color: #e7ecf3; font-family: system-ui, sans-serif; text-align: center; padding: 24px; }
+      #ftm-boot .spin { width: 34px; height: 34px; border-radius: 50%;
+        border: 3px solid rgba(141,240,193,.25); border-top-color: #8df0c1;
+        animation: ftm-spin 1s linear infinite; }
+      @keyframes ftm-spin { to { transform: rotate(360deg); } }
+      #ftm-boot .err { font-size: 13px; color: #ffb4b4; max-width: 520px; word-break: break-word; }
+      #ftm-boot .hint { font-size: 13px; color: #9fb0c3; max-width: 520px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="ftm-boot">
+      <div class="spin"></div>
+      <div>Cargando Fútbol Total Manager…</div>
+    </div>
+    <script>
+      (function () {
+        var boot = document.getElementById('ftm-boot');
+        function mounted() {
+          var r = document.getElementById('root');
+          return r && r.children.length > 0;
+        }
+        function fail(msg, extra) {
+          if (mounted() || !boot) return;
+          boot.innerHTML = '<div style="font-size:18px;font-weight:700">No se pudo iniciar el juego</div>' +
+            '<div class="err">' + String(msg || 'Error desconocido') + (extra ? ' · ' + extra : '') + '</div>' +
+            '<div class="hint">Esto suele deberse a un <b>Android System WebView</b> antiguo. ' +
+            'Abre Google Play, busca "Android System WebView" y "Google Chrome" y actualízalos; ' +
+            'después vuelve a abrir el juego.</div>';
+        }
+        window.addEventListener('error', function (e) {
+          if (mounted()) return;
+          fail(e.message || 'Error al cargar', (e.filename || '').split('/').pop() + ':' + (e.lineno || 0));
+        }, true);
+        window.addEventListener('unhandledrejection', function (e) {
+          if (mounted()) return;
+          var r = e.reason;
+          fail((r && r.message) || String(r || 'Error inesperado'));
+        });
+        setTimeout(function () {
+          if (!mounted()) fail('El juego no respondió a tiempo');
+        }, 20000);
+      })();
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
