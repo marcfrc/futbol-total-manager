@@ -197,6 +197,12 @@ button { font-family: inherit; }
 
 /* ---------- vista de partido ---------- */
 .match-view { position: absolute; inset: 0; }
+/* viñeta cinematográfica (oscurece las esquinas como una retransmisión) */
+.match-view::after {
+  content: "";
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse 105% 90% at 50% 42%, transparent 58%, rgba(4,8,14,0.34) 100%);
+}
 .match-hud { position: absolute; inset: 0; pointer-events: none; }
 .match-hud > * { pointer-events: auto; }
 

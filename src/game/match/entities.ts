@@ -52,28 +52,39 @@ export function createPlayerMesh(kitColor: string, shortsColor: string, seed: nu
   const hair = new THREE.Color(HAIR_COLORS[(seed * 3 + 1) % HAIR_COLORS.length]);
   const kitDark = kit.clone().multiplyScalar(0.55);
   const kitPale = kit.clone().lerp(new THREE.Color(0xffffff), 0.55);
+  // botas: negras, blancas o de color llamativo según el jugador
+  const BOOT_COLORS = [0x14161c, 0x14161c, 0xf2f2f2, 0xff4d2e, 0x2ec4b6, 0xffd24d];
+  const bootColor = BOOT_COLORS[seed % BOOT_COLORS.length];
 
   const kitMat = new THREE.MeshStandardMaterial({ color: kit, roughness: 0.7 });
+  const trimMat = new THREE.MeshStandardMaterial({ color: kitPale, roughness: 0.7 });
   const shortsMat = new THREE.MeshStandardMaterial({ color: shorts, roughness: 0.75 });
   const skinMat = new THREE.MeshStandardMaterial({ color: skin, roughness: 0.6 });
   const hairMat = new THREE.MeshStandardMaterial({ color: hair, roughness: 0.95 });
   const sockMat = new THREE.MeshStandardMaterial({ color: kitDark, roughness: 0.8 });
-  const bootMat = new THREE.MeshStandardMaterial({ color: 0x14161c, roughness: 0.4 });
+  const bootMat = new THREE.MeshStandardMaterial({ color: bootColor, roughness: 0.4 });
 
   // torso: camiseta ligeramente trapezoidal
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.21, 0.5, 10), kitMat);
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.21, 0.5, 14), kitMat);
   body.position.y = 1.15;
   body.scale.z = 0.72; // más ancho que profundo
   body.castShadow = true;
   group.add(body);
 
   // hombros
-  const shoulders = new THREE.Mesh(new THREE.CapsuleGeometry(0.14, 0.24, 4, 8), kitMat);
+  const shoulders = new THREE.Mesh(new THREE.CapsuleGeometry(0.14, 0.24, 4, 10), kitMat);
   shoulders.rotation.z = Math.PI / 2;
   shoulders.position.y = 1.4;
   shoulders.scale.z = 0.8;
   shoulders.castShadow = true;
   group.add(shoulders);
+
+  // cuello de la camiseta (ribete claro)
+  const collar = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.018, 6, 14), trimMat);
+  collar.rotation.x = Math.PI / 2;
+  collar.position.y = 1.435;
+  collar.scale.z = 1.15;
+  group.add(collar);
 
   // dorsal en la espalda
   const numTex = makeNumberTexture(number);
@@ -87,52 +98,57 @@ export function createPlayerMesh(kitColor: string, shortsColor: string, seed: nu
   group.add(numPlane);
 
   // cabeza + pelo
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.155, 14, 12), skinMat);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.155, 18, 14), skinMat);
   head.position.y = 1.66;
   head.scale.y = 1.08;
   head.castShadow = true;
   group.add(head);
-  const hairCap = new THREE.Mesh(new THREE.SphereGeometry(0.158, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat);
+  const hairCap = new THREE.Mesh(new THREE.SphereGeometry(0.158, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat);
   hairCap.position.y = 1.69;
   group.add(hairCap);
 
   // pantalón (cadera)
-  const hips = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.185, 0.22, 10), shortsMat);
+  const hips = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.185, 0.22, 14), shortsMat);
   hips.position.y = 0.85;
   hips.scale.z = 0.78;
   hips.castShadow = true;
   group.add(hips);
 
-  // piernas: pivote en cadera → muslo (pantalón) → media → bota
+  // piernas: pivote en cadera → muslo (pantalón) → media con franja → bota
   const mkLeg = (side: number) => {
     const pivot = new THREE.Group();
     pivot.position.set(side * 0.11, 0.86, 0);
-    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.26, 3, 8), shortsMat);
+    const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.26, 3, 10), shortsMat);
     thigh.position.y = -0.18;
     thigh.castShadow = true;
-    const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.3, 3, 8), sockMat);
+    const shin = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.3, 3, 10), sockMat);
     shin.position.y = -0.52;
     shin.castShadow = true;
+    // franja alta de la media (color claro de la equipación)
+    const sockBand = new THREE.Mesh(new THREE.CylinderGeometry(0.066, 0.066, 0.07, 10), trimMat);
+    sockBand.position.y = -0.37;
     const boot = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.07, 0.22), bootMat);
     boot.position.set(0, -0.8, 0.045);
     boot.castShadow = true;
-    pivot.add(thigh, shin, boot);
+    pivot.add(thigh, shin, sockBand, boot);
     group.add(pivot);
     return pivot;
   };
   const legL = mkLeg(-1);
   const legR = mkLeg(1);
 
-  // brazos: pivote en hombro → manga (camiseta) → antebrazo (piel)
+  // brazos: pivote en hombro → manga con puño → antebrazo (piel)
   const mkArm = (side: number) => {
     const pivot = new THREE.Group();
     pivot.position.set(side * 0.27, 1.38, 0);
-    const sleeve = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.14, 3, 8), kitMat);
+    const sleeve = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.14, 3, 10), kitMat);
     sleeve.position.y = -0.1;
-    const fore = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.26, 3, 8), skinMat);
+    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.063, 0.06, 0.05, 10), trimMat);
+    cuff.position.y = -0.19;
+    const fore = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.26, 3, 10), skinMat);
     fore.position.y = -0.33;
     fore.castShadow = true;
-    pivot.add(sleeve, fore);
+    pivot.add(sleeve, cuff, fore);
     pivot.rotation.z = side * -0.12;
     group.add(pivot);
     return pivot;
@@ -186,27 +202,42 @@ export interface BallMesh {
 }
 
 export function createBallMesh(): BallMesh {
-  // balón con pentágonos: textura canvas con dibujo tipo telstar
+  // balón tipo telstar: pentágonos negros sobre blanco con costuras, textura 256x128
   const cv = document.createElement("canvas");
-  cv.width = 128; cv.height = 64;
+  cv.width = 256; cv.height = 128;
   const g = cv.getContext("2d")!;
-  g.fillStyle = "#f6f6f6";
-  g.fillRect(0, 0, 128, 64);
+  const grad = g.createLinearGradient(0, 0, 0, 128);
+  grad.addColorStop(0, "#ffffff");
+  grad.addColorStop(1, "#dfe3e8");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 256, 128);
   g.fillStyle = "#1c1c22";
-  for (let i = 0; i < 7; i++) {
-    const x = 10 + i * 18, y = (i % 2) * 30 + 14;
+  const pent = (x: number, y: number, r: number) => {
     g.beginPath();
     for (let k = 0; k < 5; k++) {
       const a = (k / 5) * Math.PI * 2 - Math.PI / 2;
-      const px = x + Math.cos(a) * 7, py = y + Math.sin(a) * 7;
+      const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
       if (k === 0) g.moveTo(px, py); else g.lineTo(px, py);
     }
     g.closePath();
     g.fill();
+  };
+  for (let i = 0; i < 12; i++) {
+    const x = 14 + i * 21, y = (i % 2) * 58 + 30;
+    pent(x, y, 13);
+  }
+  // costuras entre paneles
+  g.strokeStyle = "rgba(28,28,34,0.35)";
+  g.lineWidth = 1.2;
+  for (let i = 0; i < 8; i++) {
+    g.beginPath();
+    g.moveTo(i * 32, 0);
+    g.quadraticCurveTo(i * 32 + 16, 64, i * 32, 128);
+    g.stroke();
   }
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const geo = new THREE.SphereGeometry(0.24, 24, 18);
+  const geo = new THREE.SphereGeometry(0.24, 28, 20);
   const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.32 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true;
