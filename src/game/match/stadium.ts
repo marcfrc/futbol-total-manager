@@ -9,37 +9,61 @@ import * as THREE from "three";
 import { BOX_D, BOX_W, GOAL_DEPTH, GOAL_H, GOAL_W, PENALTY_D, PITCH_L, PITCH_W, SIX_D, SIX_W } from "./constants";
 
 function makePitchTexture(): THREE.CanvasTexture {
-  const W = 1024, H = 1536;
+  // 1400x2100 ≈ 20.6 px/metro: las líneas se ven nítidas incluso en primeros planos
+  const W = 1400, H = 2100;
   const cv = document.createElement("canvas");
   cv.width = W; cv.height = H;
   const g = cv.getContext("2d")!;
-  // bandas de siega horizontales (perpendiculares a la cámara), contraste tipo retransmisión
-  const stripes = 16;
-  for (let i = 0; i < stripes; i++) {
-    g.fillStyle = i % 2 === 0 ? "#37a34e" : "#258239";
-    g.fillRect(0, (H / stripes) * i, W, H / stripes + 1);
+  // tablero de siega (checkerboard) como en los estadios top: cuadrantes de ~8 m
+  const COLS = 10, ROWS = 14;
+  const cw = W / COLS, ch = H / ROWS;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const even = (r + c) % 2 === 0;
+      g.fillStyle = even ? "#2a8540" : "#1f7334";
+      g.fillRect(c * cw, r * ch, cw + 1, ch + 1);
+      // micro-franjas dentro de cada cuadrante (rodillo de la cortadora)
+      g.fillStyle = even ? "rgba(255,255,255,0.018)" : "rgba(0,0,0,0.022)";
+      for (let s = 0; s < 5; s++) {
+        g.fillRect(c * cw, r * ch + (ch / 5) * s, cw, ch / 10);
+      }
+    }
+  }
+  // parches irregulares de tono (desgaste natural del césped)
+  for (let i = 0; i < 46; i++) {
+    const x = Math.random() * W, y = Math.random() * H;
+    const r = 60 + Math.random() * 220;
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    const dark = Math.random() < 0.5;
+    gr.addColorStop(0, dark ? "rgba(8,50,20,0.10)" : "rgba(160,230,160,0.05)");
+    gr.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = gr;
+    g.fillRect(x - r, y - r, r * 2, r * 2);
   }
   // moteado fino de hierba
-  for (let i = 0; i < 26000; i++) {
+  for (let i = 0; i < 34000; i++) {
     const x = Math.random() * W, y = Math.random() * H;
-    g.fillStyle = Math.random() < 0.5 ? "rgba(255,255,255,0.04)" : "rgba(0,40,10,0.05)";
+    g.fillStyle = Math.random() < 0.5 ? "rgba(255,255,255,0.028)" : "rgba(0,35,8,0.05)";
     g.fillRect(x, y, 2, 3);
   }
   // halo de luz en el centro (los focos alumbran más el centro)
-  const rad = g.createRadialGradient(W / 2, H / 2, 90, W / 2, H / 2, 1000);
-  rad.addColorStop(0, "rgba(255,255,235,0.10)");
+  const rad = g.createRadialGradient(W / 2, H / 2, 120, W / 2, H / 2, 1350);
+  rad.addColorStop(0, "rgba(255,255,235,0.07)");
   rad.addColorStop(0.6, "rgba(0,0,0,0)");
-  rad.addColorStop(1, "rgba(0,10,20,0.18)");
+  rad.addColorStop(1, "rgba(0,8,16,0.20)");
   g.fillStyle = rad;
   g.fillRect(0, 0, W, H);
 
-  const sx = W / PITCH_W, sz = H / PITCH_L;
-  const px = (x: number) => (x + PITCH_W / 2) * sx;
-  const pz = (z: number) => (z + PITCH_L / 2) * sz;
-  g.strokeStyle = "rgba(255,255,255,0.92)";
-  g.lineWidth = 5;
+  // las líneas se dibujan retranqueadas para que coincidan EXACTAMENTE con las
+  // dimensiones de juego: el plano mide PITCH+14 y la textura cubre todo el plano
+  const M = 7; // margen en metros (el plano es 14 m más grande que el campo)
+  const sx = W / (PITCH_W + M * 2), sz = H / (PITCH_L + M * 2);
+  const px = (x: number) => (x + PITCH_W / 2 + M) * sx;
+  const pz = (z: number) => (z + PITCH_L / 2 + M) * sz;
+  g.strokeStyle = "rgba(255,255,255,0.94)";
+  g.lineWidth = 0.12 * sx; // línea reglamentaria de 12 cm
   g.shadowColor = "rgba(255,255,255,0.35)";
-  g.shadowBlur = 4;
+  g.shadowBlur = 5;
   const line = (x1: number, z1: number, x2: number, z2: number) => {
     g.beginPath();
     g.moveTo(px(x1), pz(z1));
@@ -49,8 +73,8 @@ function makePitchTexture(): THREE.CanvasTexture {
   const rect = (w: number, d: number, zc: number) => {
     g.strokeRect(px(-w / 2), pz(zc - d / 2), w * sx, d * sz);
   };
-  // perímetro
-  g.strokeRect(3, 3, W - 6, H - 6);
+  // perímetro (alineado con los límites reales de juego)
+  g.strokeRect(px(-PITCH_W / 2), pz(-PITCH_L / 2), PITCH_W * sx, PITCH_L * sz);
   // medio campo y círculo central
   line(-PITCH_W / 2, 0, PITCH_W / 2, 0);
   g.beginPath();
@@ -78,15 +102,33 @@ function makePitchTexture(): THREE.CanvasTexture {
     else g.arc(W / 2, penY, r, Math.PI + half, Math.PI * 2 - half);
     g.stroke();
   }
-  // arcos de córner
+  // arcos de córner (radio reglamentario ~1 m)
   for (const cx of [-1, 1]) for (const cz of [-1, 1]) {
     g.beginPath();
-    g.arc(px(cx * (PITCH_W / 2)), pz(cz * (PITCH_L / 2)), 10, 0, Math.PI * 2);
+    g.arc(px(cx * (PITCH_W / 2)), pz(cz * (PITCH_L / 2)), 0.92 * sx, 0, Math.PI * 2);
     g.stroke();
   }
   const tex = new THREE.CanvasTexture(cv);
   tex.anisotropy = 8;
   tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** Textura sutil para el run-off alrededor del césped. */
+function makeOuterTexture(): THREE.CanvasTexture {
+  const cv = document.createElement("canvas");
+  cv.width = 256; cv.height = 256;
+  const g = cv.getContext("2d")!;
+  g.fillStyle = "#17491f";
+  g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 2600; i++) {
+    g.fillStyle = Math.random() < 0.5 ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.06)";
+    g.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(8, 9);
   return tex;
 }
 
@@ -176,6 +218,10 @@ function makeGoal(netTex: THREE.CanvasTexture): THREE.Group {
 
 export interface StadiumBuild {
   group: THREE.Group;
+  /** Animación ambiente: ola del público y scroll de las vallas LED. */
+  update: (dt: number, time: number) => void;
+  /** Celebración: el público salta durante unos segundos. */
+  crowdCelebrate: () => void;
   dispose: () => void;
 }
 
@@ -195,7 +241,7 @@ export function buildStadium(homeColor: string, awayColor: string): StadiumBuild
   group.add(pitch);
 
   // anillo exterior (run-off verde oscuro como en los estadios reales)
-  const outerMat = track(new THREE.MeshStandardMaterial({ color: 0x17491f, roughness: 1 }));
+  const outerMat = track(new THREE.MeshStandardMaterial({ map: track(makeOuterTexture()), roughness: 1 }));
   const outer = new THREE.Mesh(track(new THREE.PlaneGeometry(PITCH_W + 60, PITCH_L + 70)), outerMat);
   outer.rotation.x = -Math.PI / 2;
   outer.position.y = -0.02;
@@ -224,8 +270,8 @@ export function buildStadium(homeColor: string, awayColor: string): StadiumBuild
   }
 
   // gradas escalonadas (se ven los peldaños entre el público)
-  const stepMat = track(new THREE.MeshStandardMaterial({ color: 0x39485e, roughness: 0.85 }));
-  const stepTopMat = track(new THREE.MeshStandardMaterial({ color: 0x4a5c76, roughness: 0.8 }));
+  const stepMat = track(new THREE.MeshStandardMaterial({ color: 0x43546c, roughness: 0.85 }));
+  const stepTopMat = track(new THREE.MeshStandardMaterial({ color: 0x566a86, roughness: 0.8 }));
   const mkSteps = (len: number, side: 0 | 1 | 2 | 3) => {
     for (let r = 0; r < rows; r++) {
       const dist = 9.4 + r * 1.35;
@@ -251,7 +297,7 @@ export function buildStadium(homeColor: string, awayColor: string): StadiumBuild
   ];
   const personGeo = track(new THREE.BoxGeometry(0.52, 0.95, 0.5));
   const headGeo = track(new THREE.BoxGeometry(0.3, 0.28, 0.3));
-  const personMat = track(new THREE.MeshStandardMaterial({ roughness: 0.85, emissive: 0x1a1e26, emissiveIntensity: 0.6 }));
+  const personMat = track(new THREE.MeshStandardMaterial({ roughness: 0.85, emissive: 0x232936, emissiveIntensity: 1.0 }));
   const skinMat = track(new THREE.MeshStandardMaterial({ color: 0xd8ab84, roughness: 0.9 }));
   const crowd = new THREE.InstancedMesh(personGeo, personMat, rows * perRow * 4);
   const heads = new THREE.InstancedMesh(headGeo, skinMat, rows * perRow * 4);
@@ -259,6 +305,12 @@ export function buildStadium(homeColor: string, awayColor: string): StadiumBuild
   const c = new THREE.Color();
   let idx = 0;
   const rand = mulberryLite(12345);
+  // datos por aficionado para animar la "ola" y los saltos de celebración
+  const MAXF = rows * perRow * 4;
+  const fanX = new Float32Array(MAXF);
+  const fanY = new Float32Array(MAXF);
+  const fanZ = new Float32Array(MAXF);
+  const fanSeed = new Float32Array(MAXF);
   for (let side = 0; side < 4; side++) {
     for (let r = 0; r < rows; r++) {
       for (let i = 0; i < perRow; i++) {
@@ -271,38 +323,45 @@ export function buildStadium(homeColor: string, awayColor: string): StadiumBuild
         else if (side === 2) { z = t * (PITCH_L + 20); x = -PITCH_W / 2 - dist; }
         else { z = t * (PITCH_L + 20); x = PITCH_W / 2 + dist; }
         const jx = x + (rand() - 0.5) * 0.4, jy = y + (rand() - 0.5) * 0.2, jz = z + (rand() - 0.5) * 0.4;
+        fanX[idx] = jx; fanY[idx] = jy; fanZ[idx] = jz; fanSeed[idx] = rand() * 10;
         m.makeTranslation(jx, jy, jz);
         crowd.setMatrixAt(idx, m);
         m.makeTranslation(jx, jy + 0.62, jz);
         heads.setMatrixAt(idx, m);
         const pick = rand();
-        const col = pick < 0.34 ? crowdColors[0] : pick < 0.44 ? crowdColors[1] : crowdColors[2 + ((rand() * 6) | 0)];
-        c.copy(col).multiplyScalar(0.85 + rand() * 0.5);
+        // la grada es del equipo local: dominan sus colores como en un campo real
+        const col = pick < 0.55 ? crowdColors[0] : pick < 0.64 ? crowdColors[1] : crowdColors[2 + ((rand() * 6) | 0)];
+        c.copy(col).multiplyScalar(1.0 + rand() * 0.55);
         crowd.setColorAt(idx, c);
         idx++;
       }
     }
   }
+  const fanCount = idx;
   crowd.instanceMatrix.needsUpdate = true;
   heads.instanceMatrix.needsUpdate = true;
   if (crowd.instanceColor) crowd.instanceColor.needsUpdate = true;
   group.add(crowd, heads);
 
-  // estructura de grada con tejadillo
-  const standMat = track(new THREE.MeshStandardMaterial({ color: 0x46586f, roughness: 0.85 }));
-  const roofMat = track(new THREE.MeshStandardMaterial({ color: 0x62788f, roughness: 0.65, metalness: 0.35 }));
-  const mkStand = (w: number, h: number, d: number, x: number, z: number) => {
-    const s = new THREE.Mesh(track(new THREE.BoxGeometry(w, h, d)), standMat);
-    s.position.set(x, h / 2 - 0.5, z);
-    group.add(s);
-    const roof = new THREE.Mesh(track(new THREE.BoxGeometry(w + 2, 0.8, d + 2)), roofMat);
-    roof.position.set(x, h + 2.2, z);
-    group.add(roof);
+  // estructura de grada: muro trasero + tejadillo flotante sobre el público
+  // (el público queda FUERA de la estructura, como en un estadio real)
+  const standMat = track(new THREE.MeshStandardMaterial({ color: 0x3a4a5f, roughness: 0.85 }));
+  const roofMat = track(new THREE.MeshStandardMaterial({ color: 0x45566a, roughness: 0.65, metalness: 0.35 }));
+  const mkStand = (len: number, side: 0 | 1 | 2 | 3) => {
+    const wall = new THREE.Mesh(track(new THREE.BoxGeometry(len, 13, 2)), standMat);
+    const roof = new THREE.Mesh(track(new THREE.BoxGeometry(len + 2, 0.7, 21)), roofMat);
+    const x = side === 2 ? -1 : 1;
+    if (side === 0) { wall.position.set(0, 6, -PITCH_L / 2 - 20.5); roof.position.set(0, 13.4, -PITCH_L / 2 - 10.5); }
+    else if (side === 1) { wall.position.set(0, 6, PITCH_L / 2 + 20.5); roof.position.set(0, 13.4, PITCH_L / 2 + 10.5); }
+    else {
+      wall.rotation.y = Math.PI / 2; roof.rotation.y = Math.PI / 2;
+      wall.position.set(x * (PITCH_W / 2 + 20.5), 6, 0);
+      roof.position.set(x * (PITCH_W / 2 + 10.5), 13.4, 0);
+    }
+    group.add(wall, roof);
   };
-  mkStand(PITCH_W + 34, 10, 16, 0, -PITCH_L / 2 - 15);
-  mkStand(PITCH_W + 34, 10, 16, 0, PITCH_L / 2 + 15);
-  mkStand(16, 10, PITCH_L + 34, -PITCH_W / 2 - 15, 0);
-  mkStand(16, 10, PITCH_L + 34, PITCH_W / 2 + 15, 0);
+  mkStand(PITCH_W + 30, 0); mkStand(PITCH_W + 30, 1);
+  mkStand(PITCH_L + 30, 2); mkStand(PITCH_L + 30, 3);
 
   // torres de iluminación
   const towerMat = track(new THREE.MeshStandardMaterial({ color: 0x2a313c, roughness: 0.7, metalness: 0.4 }));
@@ -374,8 +433,49 @@ export function buildStadium(homeColor: string, awayColor: string): StadiumBuild
     }
   }
 
+  // ---------- animación ambiente ----------
+  let celebrateT = 0;
+  let waveClock = 0;
+  let crowdFrame = 0;
+
+  function updateCrowd(time: number): void {
+    // ola continua recorriendo las gradas + saltos durante las celebraciones
+    const front = (time * 1.15) % (Math.PI * 2);
+    for (let i = 0; i < fanCount; i++) {
+      const ang = Math.atan2(fanZ[i], fanX[i]);
+      let d = ang - front;
+      if (d > Math.PI) d -= Math.PI * 2;
+      if (d < -Math.PI) d += Math.PI * 2;
+      // cresta gaussiana de la ola (solo cuando pasa por ese sector)
+      let lift = Math.exp(-(d * d) / 0.06) * 0.85;
+      if (celebrateT > 0) {
+        lift += Math.max(0, Math.sin(time * 9 + fanSeed[i] * 7)) * 0.55;
+      }
+      const sway = Math.sin(time * 1.7 + fanSeed[i] * 3.1) * 0.045;
+      const y = fanY[i] + lift + sway;
+      m.makeTranslation(fanX[i], y, fanZ[i]);
+      crowd.setMatrixAt(i, m);
+      m.makeTranslation(fanX[i], y + 0.62, fanZ[i]);
+      heads.setMatrixAt(i, m);
+    }
+    crowd.instanceMatrix.needsUpdate = true;
+    heads.instanceMatrix.needsUpdate = true;
+  }
+
   return {
     group,
+    update: (dt, time) => {
+      // scroll de las vallas LED (como la publicidad rotativa real)
+      boardTexA.offset.x = (time * 0.018) % 1;
+      boardTexB.offset.x = (time * 0.024) % 1;
+      boardTexC.offset.x = (time * 0.02) % 1;
+      celebrateT = Math.max(0, celebrateT - dt);
+      // el público se actualiza a ~30 Hz repartido en 2 frames para no ahogar el móvil
+      waveClock += dt;
+      crowdFrame++;
+      if (waveClock >= 1 / 30 && crowdFrame % 2 === 0) updateCrowd(time);
+    },
+    crowdCelebrate: () => { celebrateT = 5; },
     dispose: () => { for (const d of disposables) d.dispose(); },
   };
 }

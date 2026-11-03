@@ -4,6 +4,10 @@
  */
 
 import * as THREE from "three";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { GameLoop } from "../engine";
 import {
   BALL_BOUNCE, BALL_FRICTION, BALL_GRAVITY, BALL_R, GOAL_H, GOAL_W, HALF_SECONDS,
@@ -47,12 +51,12 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
 
   // ---------- escena ----------
   const renderer = new THREE.WebGLRenderer({ canvas, preserveDrawingBuffer: true, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.1;
+  renderer.toneMappingExposure = 1.12;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a1020);
@@ -64,10 +68,10 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
     cv.width = 1024; cv.height = 512;
     const g = cv.getContext("2d")!;
     const grad = g.createLinearGradient(0, 0, 0, 512);
-    grad.addColorStop(0, "#070c17");
-    grad.addColorStop(0.5, "#0b1524");
-    grad.addColorStop(0.8, "#10202f");
-    grad.addColorStop(1, "#152a3a");
+    grad.addColorStop(0, "#0a1322");
+    grad.addColorStop(0.5, "#0f1d33");
+    grad.addColorStop(0.8, "#16293f");
+    grad.addColorStop(1, "#1d3a52");
     g.fillStyle = grad;
     g.fillRect(0, 0, 1024, 512);
     // estrellas puntuales (solo en la mitad superior del cielo)
@@ -80,10 +84,10 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
       g.fillRect(Math.random() * 1024, y, size, size);
     }
     // resplandor urbano sobre el horizonte
-    const glow = g.createLinearGradient(0, 360, 0, 470);
+    const glow = g.createLinearGradient(0, 340, 0, 480);
     glow.addColorStop(0, "rgba(255,190,120,0)");
-    glow.addColorStop(0.8, "rgba(255,190,120,0.07)");
-    glow.addColorStop(1, "rgba(255,210,150,0.03)");
+    glow.addColorStop(0.8, "rgba(255,190,120,0.13)");
+    glow.addColorStop(1, "rgba(255,210,150,0.06)");
     g.fillStyle = glow;
     g.fillRect(0, 360, 1024, 110);
     const skyTex = new THREE.CanvasTexture(cv);
@@ -97,11 +101,21 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
 
   const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.1, 400);
 
-  const amb = new THREE.AmbientLight(0xbdd3ff, 0.32);
+  // ---------- postprocesado: bloom suave estilo retransmisión ----------
+  // (focos, vallas LED y césped iluminado "giran" alrededor de las luces como en TV)
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight), 0.42, 0.55, 0.86,
+  );
+  composer.addPass(bloomPass);
+  composer.addPass(new OutputPass());
+
+  const amb = new THREE.AmbientLight(0xbdd3ff, 0.3);
   scene.add(amb);
-  const hemi = new THREE.HemisphereLight(0x9db8ff, 0x2a5426, 0.75);
+  const hemi = new THREE.HemisphereLight(0x9db8ff, 0x2a5426, 0.65);
   scene.add(hemi);
-  const flood = new THREE.DirectionalLight(0xfff4dc, 2.9);
+  const flood = new THREE.DirectionalLight(0xfff4dc, 2.6);
   flood.position.set(28, 55, 18);
   flood.castShadow = true;
   flood.shadow.mapSize.set(2048, 2048);
@@ -226,6 +240,51 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
     }
     confetti.instanceMatrix.needsUpdate = true;
     if (alive === 0) confetti.visible = false;
+  }
+
+  // ---------- estela del balón (disparos fuertes y pases largos) ----------
+  const TRAIL_N = 26;
+  const trailCv = document.createElement("canvas");
+  trailCv.width = 64; trailCv.height = 64;
+  {
+    const tg = trailCv.getContext("2d")!;
+    const rg = tg.createRadialGradient(32, 32, 2, 32, 32, 30);
+    rg.addColorStop(0, "rgba(255,255,255,0.85)");
+    rg.addColorStop(0.4, "rgba(190,225,255,0.3)");
+    rg.addColorStop(1, "rgba(190,225,255,0)");
+    tg.fillStyle = rg;
+    tg.fillRect(0, 0, 64, 64);
+  }
+  const trailTex = new THREE.CanvasTexture(trailCv);
+  const trailSprites: { s: THREE.Sprite; life: number }[] = [];
+  for (let i = 0; i < TRAIL_N; i++) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: trailTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0,
+    }));
+    sp.visible = false;
+    sp.scale.set(0.5, 0.5, 1);
+    scene.add(sp);
+    trailSprites.push({ s: sp, life: 0 });
+  }
+  let trailIdx = 0;
+  function updateTrail(dt: number): void {
+    const speed = Math.hypot(ball.vx, ball.vz) + Math.abs(ball.vy);
+    if (!ball.owner && speed > 11 && phase === "play") {
+      const t = trailSprites[trailIdx];
+      trailIdx = (trailIdx + 1) % TRAIL_N;
+      t.s.position.set(ball.x, ball.y, ball.z);
+      t.life = 0.28;
+      t.s.visible = true;
+    }
+    for (const t of trailSprites) {
+      if (!t.s.visible) continue;
+      t.life -= dt;
+      if (t.life <= 0) { t.s.visible = false; continue; }
+      const k = t.life / 0.28;
+      (t.s.material as THREE.SpriteMaterial).opacity = k * 0.6;
+      const sc = 0.3 + (1 - k) * 0.55;
+      t.s.scale.set(sc, sc, 1);
+    }
   }
 
   // ---------- estado del partido ----------
@@ -426,6 +485,7 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
 
   function registerGoal(scorer: RTPlayer): void {
     lastGoalTeam = scorer.team;
+    lastScorer = scorer;
     goals[scorer.team]++;
     const min = minuteNow();
     const side = scorer.team === 0 ? setup.home : setup.away;
@@ -440,6 +500,7 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
     slowmo = 0.35;
     shake = 0.7;
     burstConfetti(scorer.x, scorer.z);
+    stadium.crowdCelebrate();
     audio.goal();
     ball.owner = null;
     ball.vx = 0; ball.vz = 0; ball.vy = 0;
@@ -686,6 +747,7 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
 
   let lastKicker: RTPlayer | null = null;
   let lastGoalTeam: 0 | 1 = 0;
+  let lastScorer: RTPlayer | null = null;
   let lateSwellDone = false;
 
   // ---------- jugadores ----------
@@ -796,15 +858,21 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
   const camPos = new THREE.Vector3(0, 13, -22);
   function updateCamera(dt: number): void {
     const dir = userAttackDir();
+    // durante la celebración el plano se centra en el goleador
+    const focusX = phase === "goal" && lastScorer ? lastScorer.x : ball.x;
+    const focusZ = phase === "goal" && lastScorer ? lastScorer.z : ball.z;
     camTarget.set(
-      ball.x * 0.45,
+      focusX * 0.45,
       0,
-      ball.z * 0.55 + dir * 7,
+      focusZ * 0.55 + dir * 6,
     );
     // en pantallas verticales (móvil) alejamos solo un poco: el FOV amplio ya compensa
     const viewScale = camera.aspect < 0.7 ? 1.28 : camera.aspect < 0.85 ? 1.18 : camera.aspect < 1.25 ? 1.08 : 1;
-    const desiredY = (phase === "goal" ? 10.5 : 13) * viewScale;
-    const desiredBack = (phase === "goal" ? 16 : 22) * viewScale;
+    // pullback dinámico: en los contragolpes la cámara abre plano como en la TV
+    const ballSpeed = Math.hypot(ball.vx, ball.vz);
+    const pull = Math.min(4.5, ballSpeed * 0.16);
+    const desiredY = (phase === "goal" ? 10.5 : 12.2) * viewScale + pull * 0.18;
+    const desiredBack = ((phase === "goal" ? 16 : 20.5) + pull) * viewScale;
     camPos.x += (camTarget.x - camPos.x) * Math.min(1, 2.2 * dt);
     camPos.y += (desiredY - camPos.y) * Math.min(1, 2 * dt);
     camPos.z += (camTarget.z - dir * desiredBack - camPos.z) * Math.min(1, 2.2 * dt);
@@ -872,9 +940,11 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
       updatePlayers(dt);
       updateBall(dt);
       updateConfetti(dtRaw);
+      updateTrail(dtRaw);
     } else if (phase === "goal") {
       updatePlayers(dt);
       updateConfetti(dtRaw);
+      updateTrail(dtRaw);
     }
     messageT -= dtRaw;
     if (messageT <= 0) message = "";
@@ -934,11 +1004,14 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
     phase: () => phase,
   };
 
+  let ambientT = 0;
   const loop = new GameLoop({
     update: (dt) => update(dt),
     render: () => {
+      ambientT += 1 / 60;
+      stadium.update(1 / 60, ambientT);
       updateCamera(1 / 60);
-      renderer.render(scene, camera);
+      composer.render();
       window.__GAME_READY__ = true;
     },
   });
@@ -948,6 +1021,7 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
     camera.aspect = window.innerWidth / window.innerHeight;
     applyFov();
     renderer.setSize(window.innerWidth, window.innerHeight, false);
+    composer.setSize(window.innerWidth, window.innerHeight);
   };
   window.addEventListener("resize", onResize);
 
@@ -1008,6 +1082,9 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
       window.removeEventListener("blur", onBlur);
       audio.dispose();
       stadium.dispose();
+      trailTex.dispose();
+      for (const t of trailSprites) (t.s.material as THREE.SpriteMaterial).dispose();
+      composer.dispose();
       scene.traverse((o) => {
         const mesh = o as THREE.Mesh;
         if (mesh.geometry) mesh.geometry.dispose();
