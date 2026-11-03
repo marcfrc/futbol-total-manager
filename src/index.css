@@ -206,6 +206,25 @@ button { font-family: inherit; }
 .match-hud { position: absolute; inset: 0; pointer-events: none; }
 .match-hud > * { pointer-events: auto; }
 
+/* aviso de girar el móvil: solo en pantallas táctiles en vertical */
+.rotate-hint {
+  position: absolute; inset: 0; z-index: 8;
+  display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  background: rgba(5,8,14,0.92); backdrop-filter: blur(4px);
+  color: #e8eef4; font-size: 17px; font-weight: 700; text-align: center; padding: 24px;
+}
+.rotate-hint .rotate-ico {
+  font-size: 54px; display: inline-block;
+  animation: rotate-phone 1.6s ease-in-out infinite;
+}
+@keyframes rotate-phone {
+  0%, 20% { transform: rotate(0deg); }
+  60%, 100% { transform: rotate(90deg); }
+}
+@media (orientation: portrait) and (pointer: coarse) {
+  .rotate-hint { display: flex; }
+}
+
 .scoreboard {
   position: absolute; top: calc(10px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 10px;

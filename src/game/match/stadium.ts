@@ -416,19 +416,19 @@ export function buildStadium(homeColor: string, awayColor: string): StadiumBuild
     group.add(board);
   }
 
-  // banquillos junto a la banda
+  // banquillos en la banda, a la altura del medio campo (fuera de las vallas LED)
   const dugMat = track(new THREE.MeshStandardMaterial({ color: 0x22303f, roughness: 0.8 }));
   const dugRoofMat = track(new THREE.MeshStandardMaterial({ color: 0x2ec4b6, roughness: 0.4, metalness: 0.3 }));
-  for (const dx of [-8, 8]) {
-    const bench = new THREE.Mesh(track(new THREE.BoxGeometry(5.5, 1.1, 1.6)), dugMat);
-    bench.position.set(dx, 0.55, -34.5);
+  for (const dz of [-8, 8]) {
+    const bench = new THREE.Mesh(track(new THREE.BoxGeometry(1.6, 1.1, 5.5)), dugMat);
+    bench.position.set(PITCH_W / 2 + 6.5, 0.55, dz);
     group.add(bench);
-    const roof = new THREE.Mesh(track(new THREE.BoxGeometry(5.8, 0.15, 2)), dugRoofMat);
-    roof.position.set(dx, 2.3, -34.7);
+    const roof = new THREE.Mesh(track(new THREE.BoxGeometry(2, 0.15, 5.8)), dugRoofMat);
+    roof.position.set(PITCH_W / 2 + 6.3, 2.3, dz);
     group.add(roof);
-    for (const sx2 of [-2.4, 2.4]) {
+    for (const sz2 of [-2.4, 2.4]) {
       const leg = new THREE.Mesh(track(new THREE.BoxGeometry(0.12, 1.8, 0.12)), dugMat);
-      leg.position.set(dx + sx2, 1.4, -34.7);
+      leg.position.set(PITCH_W / 2 + 6.5, 1.4, dz + sz2);
       group.add(leg);
     }
   }

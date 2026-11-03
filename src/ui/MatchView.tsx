@@ -33,7 +33,14 @@ export default function MatchView({ setup, onFinish }: Props) {
       },
       onEnd: setOutcome,
     });
-    return () => stopGame();
+    // el partido se juega en horizontal: intenta bloquear la orientación
+    // (funciona en PWA instalada y en Android; en navegador normal se ignora)
+    const so = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void>; unlock?: () => void };
+    so.lock?.("landscape").catch(() => {});
+    return () => {
+      stopGame();
+      so.unlock?.();
+    };
   }, [setup]);
 
   // ---------- joystick táctil ----------
@@ -80,6 +87,11 @@ export default function MatchView({ setup, onFinish }: Props) {
   return (
     <div className="match-view">
       <canvas id="game-canvas" ref={canvasRef} />
+      {/* aviso en vertical: el partido está pensado para horizontal */}
+      <div className="rotate-hint">
+        <span className="rotate-ico">📱</span>
+        <span>Gira el móvil para jugar en horizontal</span>
+      </div>
       <div className="match-hud">
         {/* marcador */}
         <div className="scoreboard">
