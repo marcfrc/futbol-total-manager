@@ -33,7 +33,10 @@ async function shots(name, viewport, touch) {
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
   await page.waitForFunction(() => !!window.__FTM_DEBUG__, null, { timeout: 8000 });
   await page.evaluate(() => window.__FTM_DEBUG__.quickMatch());
-  await page.waitForFunction(() => window.__FTM_MATCH_DEBUG__?.phase?.() === "play", null, { timeout: 20000 });
+  // salta la secuencia de salida para acelerar la captura
+  await page.waitForTimeout(600);
+  await page.keyboard.press("Space");
+  await page.waitForFunction(() => window.__FTM_MATCH_DEBUG__?.phase?.() === "play", null, { timeout: 25000 });
   await page.waitForTimeout(1200);
   await page.screenshot({ path: `/tmp/g-${name}-play.png` });
   // gol forzado: celebración + público saltando

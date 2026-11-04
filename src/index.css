@@ -233,7 +233,28 @@ button { font-family: inherit; }
   padding: 8px 14px; font-weight: 800; font-size: clamp(14px, 2.4vw, 18px);
   font-variant-numeric: tabular-nums;
   pointer-events: none; white-space: nowrap; gap: 8px; max-width: 62vw; overflow: hidden;
+  animation: sb-pop 0.55s cubic-bezier(0.2, 1.6, 0.4, 1);
 }
+@keyframes sb-pop {
+  0% { transform: translateX(-50%) scale(0.82); box-shadow: 0 0 0 rgba(46,196,182,0); }
+  55% { transform: translateX(-50%) scale(1.08); box-shadow: 0 0 28px rgba(46,196,182,0.55); }
+  100% { transform: translateX(-50%) scale(1); box-shadow: 0 0 0 rgba(46,196,182,0); }
+}
+
+/* distintivo de repetición estilo TV */
+.replay-badge {
+  position: absolute; top: calc(64px + env(safe-area-inset-top)); left: 12px;
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(8,12,20,0.82); border: 1px solid var(--line); border-radius: 10px;
+  padding: 7px 12px; font-weight: 900; font-size: 13px; letter-spacing: 1px;
+  pointer-events: none; animation: replay-in 0.35s ease-out;
+}
+.replay-badge .rec-dot {
+  width: 10px; height: 10px; border-radius: 50%; background: #ef4444;
+  animation: rec-blink 1s ease-in-out infinite;
+}
+@keyframes rec-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@keyframes replay-in { from { transform: translateX(-16px); opacity: 0; } to { transform: none; opacity: 1; } }
 .scoreboard .clk { color: var(--accent); font-variant-numeric: tabular-nums; font-size: 0.85em; min-width: 34px; text-align: center; }
 .scoreboard .half { color: var(--text-dim); font-size: 11px; font-weight: 600; }
 

@@ -93,14 +93,19 @@ export default function MatchView({ setup, onFinish }: Props) {
         <span>Gira el móvil para jugar en horizontal</span>
       </div>
       <div className="match-hud">
-        {/* marcador */}
-        <div className="scoreboard">
+        {/* marcador (se anima al cambiar el resultado, como en TV) */}
+        <div className="scoreboard" key={`${hud?.homeGoals ?? 0}-${hud?.awayGoals ?? 0}`}>
           <span>{setup.home.short}</span>
           <span>{hud?.homeGoals ?? 0} - {hud?.awayGoals ?? 0}</span>
           <span>{setup.away.short}</span>
           <span className="clk">{hud ? `${hud.minute}'` : "0'"}</span>
           <span className="half">{hud?.half === 2 ? "2ª" : "1ª"}</span>
         </div>
+
+        {/* distintivo de repetición */}
+        {hud?.phase === "replay" && (
+          <div className="replay-badge"><span className="rec-dot" /> REPETICIÓN</div>
+        )}
 
         <div className="hud-topright">
           <button className="hud-btn" title={muted ? "Activar sonido" : "Silenciar"} onClick={() => setMuted(eng()?.toggleMute() ?? false)}>
@@ -130,8 +135,8 @@ export default function MatchView({ setup, onFinish }: Props) {
           {feed.map((e) => <span key={e.id} className={e.kind}>{e.text}</span>)}
         </div>
 
-        {/* controles táctiles */}
-        {hud?.phase !== "paused" && hud?.phase !== "fulltime" && (
+        {/* controles táctiles (ocultos en replays, salida y pausas) */}
+        {hud?.phase !== "paused" && hud?.phase !== "fulltime" && hud?.phase !== "replay" && hud?.phase !== "walkout" && (
           <>
             <div
               ref={stickRef}
