@@ -114,6 +114,48 @@ function makePitchTexture(): THREE.CanvasTexture {
   return tex;
 }
 
+/** Normal map procedural del césped: las briznas crean relieve al darles la luz. */
+function makeGrassNormalMap(): THREE.CanvasTexture {
+  const S = 256;
+  // ruido suave: aleatorio 64x64 ampliado con interpolación bilineal
+  const small = document.createElement("canvas");
+  small.width = 64; small.height = 64;
+  const sg = small.getContext("2d")!;
+  const im = sg.createImageData(64, 64);
+  const rnd = mulberryLite(777);
+  for (let i = 0; i < 64 * 64; i++) {
+    const v = (rnd() * 255) | 0;
+    im.data[i * 4] = v; im.data[i * 4 + 1] = v; im.data[i * 4 + 2] = v; im.data[i * 4 + 3] = 255;
+  }
+  sg.putImageData(im, 0, 0);
+  const cv = document.createElement("canvas");
+  cv.width = S; cv.height = S;
+  const g = cv.getContext("2d")!;
+  g.imageSmoothingEnabled = true;
+  g.drawImage(small, 0, 0, S, S);
+  // altura → normal (Sobel ligero)
+  const src = g.getImageData(0, 0, S, S).data;
+  const out = g.createImageData(S, S);
+  const hAt = (x: number, y: number) => src[(((y + S) % S) * S + ((x + S) % S)) * 4];
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const dx = (hAt(x + 1, y) - hAt(x - 1, y)) / 255;
+      const dy = (hAt(x, y + 1) - hAt(x, y - 1)) / 255;
+      const i = (y * S + x) * 4;
+      out.data[i] = 128 - dx * 90;
+      out.data[i + 1] = 128 - dy * 90;
+      out.data[i + 2] = 255;
+      out.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(out, 0, 0);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(22, 30);
+  return tex;
+}
+
 /** Textura sutil para el run-off alrededor del césped. */
 function makeOuterTexture(): THREE.CanvasTexture {
   const cv = document.createElement("canvas");
@@ -232,9 +274,12 @@ export function buildStadium(homeColor: string, awayColor: string): StadiumBuild
   const disposables: { dispose: () => void }[] = [];
   const track = <T extends { dispose: () => void }>(r: T): T => { disposables.push(r); return r; };
 
-  // césped
+  // césped (con relieve: la luz de los focos juega con las briznas)
   const pitchTex = track(makePitchTexture());
-  const pitchMat = track(new THREE.MeshStandardMaterial({ map: pitchTex, roughness: 0.95 }));
+  const pitchNrm = track(makeGrassNormalMap());
+  const pitchMat = track(new THREE.MeshStandardMaterial({
+    map: pitchTex, normalMap: pitchNrm, normalScale: new THREE.Vector2(0.42, 0.42), roughness: 0.88,
+  }));
   const pitch = new THREE.Mesh(track(new THREE.PlaneGeometry(PITCH_W + 14, PITCH_L + 14)), pitchMat);
   pitch.rotation.x = -Math.PI / 2;
   pitch.receiveShadow = true;

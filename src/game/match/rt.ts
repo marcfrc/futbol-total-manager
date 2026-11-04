@@ -42,7 +42,7 @@ export interface MatchOutcome {
 }
 
 export type Phase =
-  | "countdown" | "play" | "goal" | "setpiece"
+  | "walkout" | "countdown" | "play" | "goal" | "replay" | "setpiece"
   | "halftime" | "fulltime" | "paused";
 
 export interface HudState {
