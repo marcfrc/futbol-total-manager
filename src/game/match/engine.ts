@@ -22,7 +22,7 @@ import type { MatchCallbacks, MatchOutcome, MatchSetup, Phase, RTBall, RTPlayer,
 
 declare global {
   interface Window {
-    __FTM_MATCH_DEBUG__?: { forceGoal: () => void; skipToMinute: (m: number) => void; perf: () => { calls: number; triangles: number }; phase: () => string };
+    __FTM_MATCH_DEBUG__?: { forceGoal: () => void; skipToMinute: (m: number) => void; zoom: (f: number) => void; anim: (name: string) => void; animInfo: () => number; animPose: () => [number, number]; perf: () => { calls: number; triangles: number }; phase: () => string };
   }
 }
 
@@ -51,9 +51,23 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
 
   // ---------- escena ----------
   const renderer = new THREE.WebGLRenderer({ canvas, preserveDrawingBuffer: true, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6));
+  // calidad adaptativa: a tope en GPU real (móvil flagship), mínima en render
+  // por software (CI/verificación). Además baja de forma dinámica si los fps caen.
+  let softGL = false;
+  try {
+    const gl = renderer.getContext();
+    const ext = gl.getExtension("WEBGL_debug_renderer_info");
+    const rn = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "";
+    softGL = /swiftshader|llvmpipe|software|angle \(google/i.test(rn);
+  } catch { /* sin info: asumimos GPU real */ }
+  const quality = {
+    pr: softGL ? 1 : Math.min(window.devicePixelRatio, 2.0),
+    samples: softGL ? 0 : 4,
+    hdr: !softGL,
+  };
+  renderer.setPixelRatio(quality.pr);
   renderer.setSize(window.innerWidth, window.innerHeight, false);
-  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.enabled = !softGL;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.12;
@@ -103,11 +117,16 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
 
   // ---------- postprocesado: bloom suave estilo retransmisión ----------
   // (focos, vallas LED y césped iluminado "giran" alrededor de las luces como en TV)
-  const composer = new EffectComposer(renderer);
+  // Render target HDR con MSAA x4: bordes limpios y bloom sin bandas.
+  const hdrTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+    samples: quality.samples, type: quality.hdr ? THREE.HalfFloatType : THREE.UnsignedByteType,
+  });
+  const composer = new EffectComposer(renderer, hdrTarget);
   composer.addPass(new RenderPass(scene, camera));
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight), 0.42, 0.55, 0.86,
   );
+  bloomPass.enabled = quality.hdr; // sin bloom en render por software (CI)
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
 
@@ -148,15 +167,33 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
     return "#f2f2f2";
   }
 
+  // el portero viste distinto: primer color candidato que contraste con ambas camisetas
+  function pickGKShirt(shirtA: string, shirtB: string): string {
+    const candidates = ["#ffd54f", "#26a69a", "#9e9e9e", "#f5f5f5", "#ff7043"];
+    const cols = [new THREE.Color(shirtA), new THREE.Color(shirtB)];
+    for (const hex of candidates) {
+      const c = new THREE.Color(hex);
+      if (cols.every((o) => Math.hypot(c.r - o.r, c.g - o.g, c.b - o.b) > 0.55)) return hex;
+    }
+    return "#78909c";
+  }
+
+  const gkShirts: [string, string] = (() => {
+    const homeShirt = pickShirt(setup.home.color1, setup.home.color2);
+    const awayShirt = pickShirt(setup.away.color1, setup.away.color2);
+    return [pickGKShirt(homeShirt, awayShirt), pickGKShirt(awayShirt, homeShirt)];
+  })();
+
   const mkTeam = (side: "home" | "away", team: 0 | 1) => {
     const s = setup[side];
     const shirt = pickShirt(s.color1, s.color2);
     const anchors = teamAnchors(s.formation, attackDir[team]);
     s.xi.forEach((lite, i) => {
-      const mesh = createPlayerMesh(shirt, s.color2, i * 7 + team * 3, i + 1);
+      const isGK = lite.pos === "GK";
+      const mesh = createPlayerMesh(isGK ? gkShirts[team] : shirt, isGK ? "#20242c" : s.color2, i * 7 + team * 3, i + 1, isGK);
       const p: RTPlayer = {
         lite, team, slotIdx: i,
-        isGK: lite.pos === "GK",
+        isGK,
         pos: lite.pos,
         anchors,
         mesh,
@@ -287,9 +324,51 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
     }
   }
 
+  // ---------- repetición de gol (ring buffer de las últimas ~10 s) ----------
+  // Grabamos posiciones a 12 Hz durante el juego; al marcar, rebobinamos con
+  // cámara cinematográfica baja de banda, como la repetición de una retransmisión.
+  const REPLAY_FPS = 12;
+  const REPLAY_MAX = REPLAY_FPS * 10;
+  const replayFrames: Float32Array[] = [];
+  let replayRecT = 0;
+  let replayCursor = 0;
+  function recordFrame(): void {
+    const f = new Float32Array(players.length * 4 + 3);
+    for (let i = 0; i < players.length; i++) {
+      const p = players[i];
+      f[i * 4] = p.x; f[i * 4 + 1] = p.z; f[i * 4 + 2] = p.faceX; f[i * 4 + 3] = p.faceZ;
+    }
+    f[players.length * 4] = ball.x; f[players.length * 4 + 1] = ball.y; f[players.length * 4 + 2] = ball.z;
+    replayFrames.push(f);
+    if (replayFrames.length > REPLAY_MAX) replayFrames.shift();
+  }
+  function applyReplayFrame(cursor: number): void {
+    const i0 = Math.max(0, Math.min(replayFrames.length - 1, Math.floor(cursor)));
+    const i1 = Math.min(replayFrames.length - 1, i0 + 1);
+    const k = Math.min(1, Math.max(0, cursor - i0));
+    const a = replayFrames[i0], b = replayFrames[i1];
+    if (!a || !b) return;
+    for (let i = 0; i < players.length; i++) {
+      const p = players[i];
+      p.x = a[i * 4] + (b[i * 4] - a[i * 4]) * k;
+      p.z = a[i * 4 + 1] + (b[i * 4 + 1] - a[i * 4 + 1]) * k;
+      p.faceX = a[i * 4 + 2] + (b[i * 4 + 2] - a[i * 4 + 2]) * k;
+      p.faceZ = a[i * 4 + 3] + (b[i * 4 + 3] - a[i * 4 + 3]) * k;
+      p.mesh.group.position.set(p.x, 0, p.z);
+      p.mesh.group.rotation.y = Math.atan2(p.faceX, p.faceZ);
+      p.mesh.animate(4, 1 / 60, clockT);
+    }
+    const bi = players.length * 4;
+    ballMesh.mesh.position.set(
+      a[bi] + (b[bi] - a[bi]) * k,
+      a[bi + 1] + (b[bi + 1] - a[bi + 1]) * k,
+      a[bi + 2] + (b[bi + 2] - a[bi + 2]) * k,
+    );
+  }
+
   // ---------- estado del partido ----------
-  let phase: Phase = "countdown";
-  let phaseT = 2.2;
+  let phase: Phase = "walkout";
+  let phaseT = 3.8;
   let clockT = 0;               // segundos reales jugados
   let half: 1 | 2 = 1;
   let goals: [number, number] = [0, 0];
@@ -393,6 +472,7 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
     ball.lastTouch = p.team;
     ball.noPickupT = 0.12;
     lastKicker = p;
+    p.mesh.kick();
     ball.x = p.x + dx * 0.7;
     ball.z = p.z + dz * 0.7;
     ball.y = BALL_R;
@@ -465,6 +545,7 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
         const succ = 0.42 + (p.lite.def - owner.lite.ovr) / 130;
         if (rng() < succ) {
           owner.stagger = 0.35;
+          owner.mesh.stumble();
           ball.owner = null;
           ball.noPickupT = 0.1;
           ball.vx = p.faceX * 6; ball.vz = p.faceZ * 6; ball.vy = 0.4;
@@ -472,6 +553,7 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
           registerInjury(owner);
         } else {
           p.stagger = 0.55;
+          p.mesh.stumble();
           addEvent(`${shortName(p)} llega tarde a la entrada`, "info");
         }
       }
@@ -499,6 +581,7 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
     phaseT = 3.2;
     slowmo = 0.35;
     shake = 0.7;
+    scorer.mesh.celebrate();
     burstConfetti(scorer.x, scorer.z);
     stadium.crowdCelebrate();
     audio.goal();
@@ -702,6 +785,7 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
             const saveP = 0.3 + (p.lite.gk - 45) / 90 - ballSpeed / 60;
             if (ballSpeed > 12 && rng() > saveP) {
               // rechace
+              p.mesh.dive(Math.sign(ball.x - p.x) || (rng() > 0.5 ? 1 : -1));
               ball.vx = (rng() - 0.5) * 10;
               ball.vz = -Math.sign(ball.z) * (4 + rng() * 6);
               ball.vy = 2 + rng() * 2;
@@ -709,7 +793,10 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
               audio.crowdSwell(0.2, 0.7);
               continue;
             }
-            if (ballSpeed > 10) addEvent(`¡Gran atajada de ${shortName(p)}!`, "chance");
+            if (ballSpeed > 10) {
+              addEvent(`¡Gran atajada de ${shortName(p)}!`, "chance");
+              p.mesh.dive(Math.sign(ball.x - p.x) || (rng() > 0.5 ? 1 : -1));
+            }
           }
           ball.owner = p;
           ball.receiver = null;
@@ -788,7 +875,7 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
         if (input.switchPl) { input.switchPl = false; doSwitch(); }
         if (charging && ball.owner === p) charge = Math.min(1, charge + dt / 0.85);
       } else {
-        if (phase === "goal" || phase === "countdown") {
+        if (phase === "goal" || phase === "countdown" || phase === "walkout") {
           // celebración / espera: trotar hacia el ancla sin lógica competitiva
           const a = p.anchors[p.slotIdx];
           p.tx = a.x; p.tz = a.z;
@@ -855,12 +942,32 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
   }
   applyFov();
   const camTarget = new THREE.Vector3(0, 0, 0);
-  const camPos = new THREE.Vector3(0, 13, -22);
+  // arranque del walkout: plano cenital alto sobre el estadio
+  const camPos = new THREE.Vector3(0, 84, -46 * userAttackDir());
+  let debugCamScale = 1;
+  let debugFocusT = 0;
+  let debugFocusX = 0;
+  let debugFocusZ = 0;
+  let dbgAnimPlayer: RTPlayer | null = null;
   function updateCamera(dt: number): void {
     const dir = userAttackDir();
+
+    // cámara de repetición: plano bajo de banda siguiendo el balón (look TV)
+    if (phase === "replay") {
+      const bp = ballMesh.mesh.position;
+      const slide = Math.min(6, replayCursor * 0.06); // ligero travelling lateral
+      camPos.x += (bp.x * 0.4 - 15 + slide - camPos.x) * Math.min(1, 2.6 * dt);
+      camPos.y += (3.3 - camPos.y) * Math.min(1, 2.6 * dt);
+      camPos.z += (bp.z * 0.55 - dir * 2 - camPos.z) * Math.min(1, 2.6 * dt);
+      camera.position.set(camPos.x, camPos.y, camPos.z);
+      camera.lookAt(bp.x, 0.7, bp.z);
+      return;
+    }
+
     // durante la celebración el plano se centra en el goleador
-    const focusX = phase === "goal" && lastScorer ? lastScorer.x : ball.x;
-    const focusZ = phase === "goal" && lastScorer ? lastScorer.z : ball.z;
+    debugFocusT = Math.max(0, debugFocusT - dt);
+    const focusX = debugFocusT > 0 ? debugFocusX : phase === "goal" && lastScorer ? lastScorer.x : ball.x;
+    const focusZ = debugFocusT > 0 ? debugFocusZ : phase === "goal" && lastScorer ? lastScorer.z : ball.z;
     camTarget.set(
       focusX * 0.45,
       0,
@@ -871,8 +978,18 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
     // pullback dinámico: en los contragolpes la cámara abre plano como en la TV
     const ballSpeed = Math.hypot(ball.vx, ball.vz);
     const pull = Math.min(4.5, ballSpeed * 0.16);
-    const desiredY = (phase === "goal" ? 10.5 : 12.2) * viewScale + pull * 0.18;
-    const desiredBack = ((phase === "goal" ? 16 : 20.5) + pull) * viewScale;
+    let desiredY = (phase === "goal" ? 10.5 : 12.2) * viewScale + pull * 0.18;
+    let desiredBack = ((phase === "goal" ? 16 : 20.5) + pull) * viewScale;
+    desiredY *= debugCamScale;
+    desiredBack *= debugCamScale;
+    // walkout: la grúa de TV baja desde el cielo del estadio al plano broadcast
+    if (phase === "walkout") {
+      const k = 1 - Math.max(0, phaseT) / 3.8;
+      const s = k * k * (3 - 2 * k);
+      desiredY = 84 - s * (84 - desiredY);
+      desiredBack = 46 - s * (46 - desiredBack);
+      camTarget.set(0, 0, -dir * 12 + s * dir * 18);
+    }
     camPos.x += (camTarget.x - camPos.x) * Math.min(1, 2.2 * dt);
     camPos.y += (desiredY - camPos.y) * Math.min(1, 2 * dt);
     camPos.z += (camTarget.z - dir * desiredBack - camPos.z) * Math.min(1, 2.2 * dt);
@@ -887,19 +1004,40 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
     camera.lookAt(camTarget.x + ball.vx * 0.06, 0.4, camTarget.z + dir * 3.5);
   }
 
+  function resumeAfterGoal(): void {
+    // saca el equipo que encajó
+    const conceded: 0 | 1 = lastGoalTeam === 0 ? 1 : 0;
+    resetPositions(conceded);
+    phase = "play";
+    audio.whistle();
+  }
+
   // ---------- bucle ----------
   let hudT = 0;
+  let dbgTicks = 0;
   function update(dtRaw: number): void {
+    dbgTicks++;
     const dt = dtRaw * slowmo;
     if (phase === "paused" || phase === "fulltime") return;
 
 
-    if (phase === "countdown") {
+    if (phase === "walkout") {
+      phaseT -= dtRaw;
+      // cualquier entrada salta la presentación
+      if (input.pass || input.lob || input.tackle || Math.hypot(input.moveX, input.moveZ) > 0.2) {
+        input.pass = input.lob = input.tackle = false;
+        phaseT = 0;
+      }
+      if (phaseT <= 0) { phase = "countdown"; phaseT = 2.2; }
+    } else if (phase === "countdown") {
       phaseT -= dt;
       setMessage(half === 1 ? "¡Comienza el partido!" : "¡Segunda parte!", 1);
       if (phaseT <= 0) { phase = "play"; audio.whistle(); }
     } else if (phase === "play") {
       clockT += dt;
+      // grabación para la repetición
+      replayRecT += dt;
+      if (replayRecT >= 1 / REPLAY_FPS) { replayRecT = 0; recordFrame(); }
       const min = minuteNow();
       // fin de la primera parte
       if (half === 1 && clockT >= HALF_SECONDS) {
@@ -917,12 +1055,23 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
       phaseT -= dtRaw; // la celebración corre a tiempo real
       if (phaseT <= 0) {
         slowmo = 1;
-        // saca el equipo que encajó
-        const conceded: 0 | 1 = lastGoalTeam === 0 ? 1 : 0;
-        resetPositions(conceded);
-        phase = "play";
-        audio.whistle();
+        // si hay material grabado suficiente, ofrecemos la repetición TV
+        if (replayFrames.length >= REPLAY_FPS * 3) {
+          phase = "replay";
+          replayCursor = 0;
+          setMessage("📺 Repetición", 3);
+        } else {
+          resumeAfterGoal();
+        }
       }
+    } else if (phase === "replay") {
+      replayCursor += dtRaw * REPLAY_FPS * 0.55; // a cámara lenta suave
+      // toca o pulsa para saltarte la repetición
+      if (input.pass || input.lob || input.tackle) {
+        input.pass = input.lob = input.tackle = false;
+        replayFrames.length = 0;
+        resumeAfterGoal();
+      } else if (replayCursor >= replayFrames.length - 1) resumeAfterGoal();
     } else if (phase === "setpiece") {
       phaseT -= dt;
       if (phaseT <= 0) resolveSetPiece();
@@ -936,7 +1085,7 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
       }
     }
 
-    if (phase === "play" || phase === "setpiece" || phase === "countdown") {
+    if (phase === "play" || phase === "setpiece" || phase === "countdown" || phase === "walkout") {
       updatePlayers(dt);
       updateBall(dt);
       updateConfetti(dtRaw);
@@ -945,6 +1094,9 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
       updatePlayers(dt);
       updateConfetti(dtRaw);
       updateTrail(dtRaw);
+    } else if (phase === "replay") {
+      applyReplayFrame(replayCursor);
+      updateConfetti(dtRaw);
     }
     messageT -= dtRaw;
     if (messageT <= 0) message = "";
@@ -992,6 +1144,8 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
   resetPositions(0);
   setControlled(nearestUserToBall());
   audio.startCrowd();
+  setMessage(`${setup.home.name} vs ${setup.away.name}`, 5.5);
+  audio.crowdSwell(0.25, 4.5);
 
   // gancho de verificación: fuerza un gol del usuario para probar la celebración
   window.__FTM_MATCH_DEBUG__ = {
@@ -1000,18 +1154,52 @@ export function startMatch(canvas: HTMLCanvasElement, setup: MatchSetup, cb: Mat
       registerGoal(scorer);
     },
     skipToMinute: (m: number) => { clockT = m * SECONDS_PER_MINUTE; },
-    perf: () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles }),
+    zoom: (f: number) => { debugCamScale = Math.max(0.15, Math.min(2, f)); },
+    animInfo: () => (dbgAnimPlayer ? dbgAnimPlayer.mesh.clipInfo() : -2),
+    animPose: () => (dbgAnimPlayer ? dbgAnimPlayer.mesh.hipsInfo() : [0, 0]),
+    anim: (name: string) => {
+      const p = nearestUserToBall(true) ?? controlled.p;
+      if (!p) return;
+      dbgAnimPlayer = p;
+      if (name === "kick") p.mesh.kick();
+      else if (name === "celebrate") p.mesh.celebrate();
+      else if (name === "stumble") p.mesh.stumble();
+      else if (name === "diveL") p.mesh.dive(-1);
+      else if (name === "diveR") p.mesh.dive(1);
+      // cámara de inspección instantánea sobre el jugador (depuración visual)
+      const dir = userAttackDir();
+      debugFocusX = p.x; debugFocusZ = p.z; debugFocusT = 3;
+      camPos.set(p.x - 1.5, 2.1, p.z - dir * 4.2);
+      camera.position.copy(camPos);
+      camera.lookAt(p.x, 0.9, p.z);
+    },
+    perf: () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, ticks: dbgTicks, phaseT, camY: camera.position.y, camZ: camera.position.z, zoomV: debugCamScale } as { calls: number; triangles: number; ticks: number; phaseT: number; camY: number; camZ: number; zoomV: number }),
     phase: () => phase,
   };
 
   let ambientT = 0;
+  let fpsAcc = 0, fpsN = 0, fpsCheckT = 0;
   const loop = new GameLoop({
     update: (dt) => update(dt),
-    render: () => {
+    render: (alpha) => {
       ambientT += 1 / 60;
       stadium.update(1 / 60, ambientT);
       updateCamera(1 / 60);
+      const t0 = performance.now();
       composer.render();
+      // calidad dinámica: si el frame medio baja de ~40 fps, reduce pixelRatio
+      fpsAcc += performance.now() - t0; fpsN++;
+      fpsCheckT += 1 / 60;
+      if (fpsCheckT >= 3 && fpsN > 10) {
+        fpsCheckT = 0;
+        const avgMs = fpsAcc / fpsN;
+        fpsAcc = 0; fpsN = 0;
+        if (avgMs > 18 && quality.pr > 1) {
+          quality.pr = Math.max(1, quality.pr - 0.25);
+          renderer.setPixelRatio(quality.pr);
+          composer.setSize(window.innerWidth, window.innerHeight);
+        }
+      }
       window.__GAME_READY__ = true;
     },
   });
